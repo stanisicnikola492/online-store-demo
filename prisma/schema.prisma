@@ -1,0 +1,307 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CUSTOMER
+  OPERATOR
+  WAREHOUSE
+  FINANCE
+}
+
+enum ReturnReason {
+  CHANGED_MIND
+  WRONG_ITEM
+  DEFECTIVE
+  DAMAGED_IN_TRANSIT
+  NOT_AS_DESCRIBED
+}
+
+enum ShippingPayer {
+  CUSTOMER
+  STORE
+}
+
+enum RequestStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  PARTIALLY_APPROVED
+  FULLY_REJECTED
+  APPEALED
+  APPEAL_REJECTED
+  RECEIVED
+  INSPECTING
+  INSPECTION_COMPLETE
+  REFUND_PENDING
+  REFUND_PROCESSING
+  REFUNDED
+  NO_REFUND_DUE
+  CLOSED
+  CANCELLED
+}
+
+enum ItemDecision {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ItemReceiptStatus {
+  NOT_APPLICABLE
+  AWAITING
+  RECEIVED
+  NOT_RECEIVED
+}
+
+enum InspectionResult {
+  PENDING
+  AS_DECLARED
+  WORSE_THAN_DECLARED
+  NOT_RECEIVED
+}
+
+enum AppealStatus {
+  PENDING
+  UPHELD
+  OVERTURNED
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  UNCERTAIN
+}
+
+model User {
+  id              String           @id @default(uuid())
+  username        String           @unique
+  displayName     String
+  passwordHash    String
+  role            UserRole
+  createdAt       DateTime         @default(now())
+  sessions        Session[]
+  orders          Order[]
+  returnRequests  ReturnRequest[]  @relation("RequestCustomer")
+  reviewedBy      ReturnRequest[]  @relation("RequestReviewer")
+  appeals         Appeal[]         @relation("AppealCustomer")
+  appealDecisions Appeal[]         @relation("AppealReviewer")
+  historyEntries  RequestHistory[]
+  notifications   Notification[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Order {
+  id                 String    @id @default(uuid())
+  orderNumber        String    @unique
+  customerId         String
+  customer           User      @relation(fields: [customerId], references: [id])
+  status             String    @default("DELIVERED")
+  paymentMethod      String
+  currency           String    @default("EUR")
+  placedAt           DateTime
+  deliveredAt        DateTime?
+  originalPaymentRef String
+  createdAt          DateTime  @default(now())
+
+  items          OrderItem[]
+  returnRequests ReturnRequest[]
+  refunds        Refund[]
+
+  @@index([customerId])
+}
+
+model OrderItem {
+  id             String  @id @default(uuid())
+  orderId        String
+  order          Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId      String
+  productName    String
+  quantity       Int
+  unitPrice      Decimal @db.Decimal(10, 2)
+  warrantyMonths Int     @default(24)
+
+  returnItems ReturnItem[]
+
+  @@index([orderId])
+}
+
+model ReturnRequest {
+  id                 String        @id @default(uuid())
+  reference          String        @unique
+  customerId         String
+  customer           User          @relation("RequestCustomer", fields: [customerId], references: [id])
+  orderId            String
+  order              Order         @relation(fields: [orderId], references: [id])
+  status             RequestStatus @default(DRAFT)
+  overallReason      ReturnReason
+  shippingPaidBy     ShippingPayer @default(STORE)
+  returnShippingCost Decimal       @db.Decimal(10, 2)
+  notes              String?       @db.Text
+  submittedAt        DateTime?
+  reviewedById       String?
+  reviewedBy         User?         @relation("RequestReviewer", fields: [reviewedById], references: [id])
+  reviewedAt         DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  items         ReturnItem[]
+  appeals       Appeal[]
+  history       RequestHistory[]
+  refunds       Refund[]
+  outboxEvents  OutboxEvent[]
+  notifications Notification[]
+
+  @@index([customerId])
+  @@index([orderId])
+  @@index([status])
+}
+
+model ReturnItem {
+  id                String            @id @default(uuid())
+  returnRequestId   String
+  returnRequest     ReturnRequest     @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  orderItemId       String
+  orderItem         OrderItem         @relation(fields: [orderItemId], references: [id])
+  productName       String
+  requestedQuantity Int
+  reason            ReturnReason
+  approvedQuantity  Int?
+  decision          ItemDecision      @default(PENDING)
+  decisionReason    String?           @db.Text
+  decidedById       String?
+  decidedAt         DateTime?
+  receiptStatus     ItemReceiptStatus @default(NOT_APPLICABLE)
+  inspectionResult  InspectionResult  @default(PENDING)
+  inspectionComment String?           @db.Text
+  inspectedById     String?
+  inspectedAt       DateTime?
+  refundPercentage  Int?
+  refundableBase    Decimal?          @db.Decimal(10, 2)
+  estimatedRefund   Decimal?          @db.Decimal(10, 2)
+  finalRefundAmount Decimal?          @db.Decimal(10, 2)
+
+  @@index([returnRequestId])
+  @@index([orderItemId])
+}
+
+model Appeal {
+  id              String        @id @default(uuid())
+  returnRequestId String
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  customerId      String
+  customer        User          @relation("AppealCustomer", fields: [customerId], references: [id])
+  comment         String        @db.Text
+  status          AppealStatus  @default(PENDING)
+  reviewedById    String?
+  reviewedBy      User?         @relation("AppealReviewer", fields: [reviewedById], references: [id])
+  reviewReason    String?       @db.Text
+  createdAt       DateTime      @default(now())
+  reviewedAt      DateTime?
+
+  @@unique([returnRequestId])
+  @@index([customerId])
+}
+
+model Refund {
+  id              String        @id @default(uuid())
+  returnRequestId String
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id])
+  orderId         String
+  order           Order         @relation(fields: [orderId], references: [id])
+  amount          Decimal       @db.Decimal(10, 2)
+  currency        String        @default("EUR")
+  paymentMethod   String
+  idempotencyKey  String        @unique
+  providerRef     String?
+  status          RefundStatus  @default(PENDING)
+  failureReason   String?       @db.Text
+  initiatedById   String?
+  initiatedAt     DateTime?
+  settledAt       DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  attempts RefundAttempt[]
+
+  @@index([status])
+}
+
+model RefundAttempt {
+  id              String   @id @default(uuid())
+  refundId        String
+  refund          Refund   @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  attemptNumber   Int
+  requestKey      String
+  outcome         String
+  providerCode    String?
+  providerMessage String?  @db.Text
+  latencyMs       Int?
+  createdAt       DateTime @default(now())
+
+  @@unique([refundId, attemptNumber])
+  @@index([refundId])
+}
+
+model RequestHistory {
+  id              String        @id @default(uuid())
+  returnRequestId String
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  actorId         String?
+  actor           User?         @relation(fields: [actorId], references: [id])
+  actorLabel      String
+  action          String
+  fromStatus      String?
+  toStatus        String?
+  detail          Json?
+  reason          String?       @db.Text
+  createdAt       DateTime      @default(now())
+
+  @@index([returnRequestId, createdAt])
+}
+
+model OutboxEvent {
+  id              String         @id @default(uuid())
+  returnRequestId String?
+  returnRequest   ReturnRequest? @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  type            String
+  payload         Json
+  createdAt       DateTime       @default(now())
+  processedAt     DateTime?
+  attempts        Int            @default(0)
+
+  @@index([processedAt, createdAt])
+}
+
+model Notification {
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  returnRequestId String?
+  returnRequest   ReturnRequest? @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  title           String
+  body            String         @db.Text
+  channel         String         @default("in_app")
+  readAt          DateTime?
+  createdAt       DateTime       @default(now())
+
+  @@index([userId, readAt])
+}

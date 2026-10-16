@@ -1,0 +1,40 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: rma-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root-pass
+      MYSQL_DATABASE: rma
+      MYSQL_USER: rma
+      MYSQL_PASSWORD: rma-pass
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - '3306:3306'
+    volumes:
+      - rma-db-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot', '-proot-pass']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  app:
+    build: .
+    container_name: rma-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://rma:rma-pass@db:3306/rma
+      SESSION_SECRET: demo-session-secret-not-for-production
+      NODE_ENV: production
+    ports:
+      - '4500:4500'
+
+volumes:
+  rma-db-data:
